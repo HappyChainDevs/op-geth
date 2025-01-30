@@ -1127,6 +1127,36 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	filter.OnlyPlainTxs, filter.OnlyBlobTxs = false, true
 	pendingBlobTxs := w.eth.TxPool().Pending(filter)
 
+	if w.config.RandomnessContractAddress != nil {
+		randomnessContractAddress := *w.config.RandomnessContractAddress
+
+		slot := common.BigToHash(big.NewInt(0))
+		ownerHash := env.state.GetState(randomnessContractAddress, slot)
+		randomnessOwner := common.BytesToAddress(ownerHash.Bytes())
+
+		privilegedPlainTxs := make(map[common.Address][]*txpool.LazyTransaction)
+		privilegedBlobTxs := make(map[common.Address][]*txpool.LazyTransaction)
+
+		if txs := pendingPlainTxs[randomnessOwner]; len(txs) > 0 {
+			privilegedPlainTxs[randomnessOwner] = txs
+			delete(pendingPlainTxs, randomnessOwner)
+		}
+
+		if txs := pendingBlobTxs[randomnessOwner]; len(txs) > 0 {
+			privilegedBlobTxs[randomnessOwner] = txs
+			delete(pendingBlobTxs, randomnessOwner)
+		}
+
+		if len(privilegedPlainTxs) > 0 || len(privilegedBlobTxs) > 0 {
+			plainTxs := newTransactionsByPriceAndNonce(env.signer, privilegedPlainTxs, env.header.BaseFee)
+			blobTxs := newTransactionsByPriceAndNonce(env.signer, privilegedBlobTxs, env.header.BaseFee)
+
+			if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Split the pending transactions into locals and remotes.
 	localPlainTxs, remotePlainTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingPlainTxs
 	localBlobTxs, remoteBlobTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingBlobTxs
