@@ -1127,11 +1127,14 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	filter.OnlyPlainTxs, filter.OnlyBlobTxs = false, true
 	pendingBlobTxs := w.eth.TxPool().Pending(filter)
 
-	if w.config.RandomnessContractAddress != nil {
-		randomnessContractAddress := *w.config.RandomnessContractAddress
+	if w.config.ConfigContractAddress != nil {
+		configContractAddress := *w.config.ConfigContractAddress
+		randomSlot := common.BigToHash(big.NewInt(1))
+		randomnessHash := env.state.GetState(configContractAddress, randomSlot)
+		randomnessAddress := common.BytesToAddress(randomnessHash.Bytes())
 
-		slot := common.BigToHash(big.NewInt(0))
-		ownerHash := env.state.GetState(randomnessContractAddress, slot)
+		ownerSlot := common.BigToHash(big.NewInt(0))
+		ownerHash := env.state.GetState(randomnessAddress, ownerSlot)
 		randomnessOwner := common.BytesToAddress(ownerHash.Bytes())
 
 		privilegedPlainTxs := make(map[common.Address][]*txpool.LazyTransaction)

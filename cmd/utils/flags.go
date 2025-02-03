@@ -504,9 +504,9 @@ var (
 		Value:    ethconfig.Defaults.Miner.NewPayloadTimeout,
 		Category: flags.MinerCategory,
 	}
-	MinerRandomnessContractAddressFlag = &cli.StringFlag{
-		Name:     "miner.randomness-contract-address",
-		Usage:    "0x prefixed public address for the randomness contract",
+	MinerConfigContractAddressFlag = &cli.StringFlag{
+		Name:     "miner.config-contract-address",
+		Usage:    "0x prefixed public address for the config contract",
 		Category: flags.MinerCategory,
 	}
 
@@ -1393,22 +1393,22 @@ func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
 	cfg.Miner.Etherbase = common.BytesToAddress(b)
 }
 
-// setRandomnessContractAddress retrieves the randomness contract address from the directly specified command line flags.
-func setRandomnessContractAddress(ctx *cli.Context, cfg *ethconfig.Config) {
-	if !ctx.IsSet(MinerRandomnessContractAddressFlag.Name) {
+// setConfigContractAddress retrieves the config contract address from the directly specified command line flags.
+func setConfigContractAddress(ctx *cli.Context, cfg *ethconfig.Config) {
+	if !ctx.IsSet(MinerConfigContractAddressFlag.Name) {
 		return
 	}
-	addr := ctx.String(MinerRandomnessContractAddressFlag.Name)
+	addr := ctx.String(MinerConfigContractAddressFlag.Name)
 	if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
 		addr = addr[2:]
 	}
 	b, err := hex.DecodeString(addr)
 	if err != nil || len(b) != common.AddressLength {
-		Fatalf("-%s: invalid randomness contract address %q", MinerRandomnessContractAddressFlag.Name, addr)
+		Fatalf("-%s: invalid config contract address %q", MinerConfigContractAddressFlag.Name, addr)
 		return
 	}
-	randomnessContractAddr := common.BytesToAddress(b)
-	cfg.Miner.RandomnessContractAddress = &randomnessContractAddr
+	configContractAddr := common.BytesToAddress(b)
+	cfg.Miner.ConfigContractAddress = &configContractAddr
 }
 
 // MakePasswordList reads password lines from the file specified by the global --password flag.
@@ -1737,7 +1737,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 
 	// Set configurations from CLI flags
 	setEtherbase(ctx, cfg)
-	setRandomnessContractAddress(ctx, cfg)
+	setConfigContractAddress(ctx, cfg)
 	setGPO(ctx, &cfg.GPO)
 	setTxPool(ctx, &cfg.TxPool)
 	setMiner(ctx, &cfg.Miner)

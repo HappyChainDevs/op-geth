@@ -58,7 +58,7 @@ type Config struct {
 	GasPrice  *big.Int       // Minimum gas price for mining a transaction
 	Recommit  time.Duration  // The time interval for miner to re-create mining work.
 
-	RandomnessContractAddress *common.Address // The address of the randomness contract
+	ConfigContractAddress *common.Address // The address of the config contract
 
 	NewPayloadTimeout time.Duration // The maximum time allowance for creating a new payload
 
