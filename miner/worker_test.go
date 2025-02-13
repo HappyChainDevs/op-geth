@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 )
 
@@ -507,5 +508,221 @@ func testGetSealingWork(t *testing.T, chainConfig *params.ChainConfig, engine co
 			}
 			assertBlock(r.block, c.expectNumber, c.coinbase, c.random)
 		}
+	}
+}
+
+// This test demonstrates that the transction from the owner of the random address
+// will be placed first in the block, even if the gas price is lower than other transactions.
+func TestRandomOwnerTxPlacement(t *testing.T) {
+	t.Parallel()
+
+	// Create an in-memory database and prepare it for tries
+	db := rawdb.NewMemoryDatabase()
+	dbConfig := &triedb.Config{}
+	tdb := triedb.NewDatabase(db, dbConfig)
+
+	// Generate a key that will act as the Clique signer
+	testBankKey, _ := crypto.GenerateKey()
+	testBankAddress := crypto.PubkeyToAddress(testBankKey.PublicKey)
+
+	// Create the chain config (Clique)
+	config := *params.AllCliqueProtocolChanges
+	config.Clique = &params.CliqueConfig{Period: 1, Epoch: 30000}
+
+	// Instantiate the Clique engine
+	engine := clique.New(config.Clique, db)
+
+	// Authorize the signer so blocks can be sealed
+	engine.Authorize(testBankAddress, func(a accounts.Account, s string, data []byte) ([]byte, error) {
+		hash := crypto.Keccak256(data)
+		return crypto.Sign(hash, testBankKey)
+	})
+
+	// Prepare the extra data for a single signer: 32 bytes vanity + 20 bytes address + 65 bytes signature
+	extra := make([]byte, 32+common.AddressLength+crypto.SignatureLength)
+	copy(extra[32:32+common.AddressLength], testBankAddress[:])
+
+	// Example slot storage to be placed in the genesis state
+	configAddress := common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	randomAddress := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	randomAddressHash := common.BytesToHash(common.LeftPadBytes(randomAddress.Bytes(), 32))
+
+	// Priority address (the signer) and another address
+	priorityKey := testBankKey
+	priorityAddress := testBankAddress
+
+	priorityAddressHash := common.BytesToHash(common.LeftPadBytes(priorityAddress.Bytes(), 32))
+
+	otherKey, _ := crypto.GenerateKey()
+	otherAddress := crypto.PubkeyToAddress(otherKey.PublicKey)
+
+	// Construct the genesis with initial allocations, storage, and correct extra data
+	genesis := &core.Genesis{
+		Config:    &config,
+		Timestamp: 9000,
+		ExtraData: extra,
+		Alloc: core.GenesisAlloc{
+			// Signer account with some storage
+			configAddress: {
+				Balance: big.NewInt(1e18),
+				Storage: map[common.Hash]common.Hash{
+					common.HexToHash("0x01"): randomAddressHash,
+				},
+			},
+			randomAddress: {
+				Balance: big.NewInt(1e18),
+				Storage: map[common.Hash]common.Hash{
+					common.HexToHash("0x00"): priorityAddressHash,
+				},
+			},
+
+			// Both addresses need balance to pay for gas
+			otherAddress: {
+				Balance: big.NewInt(1e18),
+			},
+			priorityAddress: {
+				Balance: big.NewInt(1e18),
+			},
+		},
+	}
+
+	// Commit the genesis block
+	if _, err := genesis.Commit(db, tdb); err != nil {
+		t.Fatalf("Failed to commit genesis: %v", err)
+	}
+	// Create the blockchain from the genesis
+	blockchain, err := core.NewBlockChain(db, nil, genesis, nil, engine, vm.Config{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Failed to create blockchain: %v", err)
+	}
+	defer blockchain.Stop()
+
+	// Build a backend for the worker based on this blockchain
+	backend := newCustomTestWorkerBackend(t, &config, engine, db, blockchain)
+
+	priorityConfig := &Config{
+		Recommit:              time.Second,
+		GasCeil:               params.GenesisGasLimit,
+		ConfigContractAddress: &configAddress,
+	}
+
+	// Create a worker
+	w := newWorker(priorityConfig, &config, engine, backend, new(event.TypeMux), nil, false)
+	w.setEtherbase(testBankAddress)
+	defer w.close()
+
+	// Subscribe to mined block events
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+
+	// Start the mining worker
+	w.start()
+
+	// We will repeat the test logic multiple times.
+	// In each iteration, the non-priority transactions will use a higher gas price.
+	// We still expect the priority transactions to appear first (due to custom logic).
+	const attempts = 5
+	const txCount = 3
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		// Gas prices: priority < non-priority (reversed from normal scenario)
+		priorityGasPrice := big.NewInt(params.InitialBaseFee * 5)
+		nonPriorityGasPrice := big.NewInt(params.InitialBaseFee * 50)
+
+		var txs []*types.Transaction
+		signer := types.LatestSigner(&config)
+
+		// Generate some transactions from non-priority address
+		baseNonceOther := backend.txPool.Nonce(otherAddress) + uint64((attempt-1)*100)
+		for i := 0; i < txCount; i++ {
+			tx := types.MustSignNewTx(otherKey, signer, &types.LegacyTx{
+				Nonce:    baseNonceOther + uint64(i),
+				To:       &priorityAddress,
+				Value:    big.NewInt(1),
+				Gas:      params.TxGas,
+				GasPrice: nonPriorityGasPrice,
+			})
+			txs = append(txs, tx)
+		}
+
+		// Generate some transactions from priority address
+		// We'll use offset-based nonces so they don't collide across attempts
+		baseNoncePriority := backend.txPool.Nonce(priorityAddress) + uint64((attempt-1)*100)
+		for i := 0; i < txCount; i++ {
+			tx := types.MustSignNewTx(priorityKey, signer, &types.LegacyTx{
+				Nonce:    baseNoncePriority + uint64(i),
+				To:       &otherAddress,
+				Value:    big.NewInt(1),
+				Gas:      params.TxGas,
+				GasPrice: priorityGasPrice,
+			})
+			txs = append(txs, tx)
+		}
+
+		// Inject transactions into the txpool
+		backend.txPool.Add(txs, true, false)
+
+		// Give the worker a short moment to process transactions
+		time.Sleep(1 * time.Second)
+
+		// Attempt to receive a newly mined block. We allow multiple tries if needed.
+		var minedBlock *types.Block
+	SelectLoop:
+		for tries := 0; tries < 3; tries++ {
+			select {
+			case ev := <-sub.Chan():
+				block := ev.Data.(core.NewMinedBlockEvent).Block
+				if block == nil {
+					// Wait a bit, then continue the select loop
+					time.Sleep(1 * time.Second)
+					continue
+				}
+				// We want to ensure at least 6 tx are in the block
+				if len(block.Transactions()) < 2*txCount {
+					// Not enough transactions yet; wait and keep trying
+					time.Sleep(1 * time.Second)
+					continue
+				}
+				minedBlock = block
+				break SelectLoop
+			case <-time.After(3 * time.Second):
+				// No block arrived in this timeslot, try again
+			}
+		}
+
+		if minedBlock == nil {
+			continue
+		}
+
+		// At this point, we have a block with >= 6 transactions. Let's check them.
+		blockTxs := minedBlock.Transactions()
+		var senders []common.Address
+		for _, tx := range blockTxs {
+			s, err := types.Sender(signer, tx)
+			if err != nil {
+				t.Fatalf("Error extracting sender: %v", err)
+			}
+			senders = append(senders, s)
+		}
+
+		// Verify that the first 3 transactions were from the priority address
+		for i := 0; i < txCount; i++ {
+			if senders[i] != priorityAddress {
+				t.Fatalf("Attempt %d: Transaction %d was sent by %s instead of the priority address",
+					attempt, i, senders[i].Hex())
+			}
+		}
+	}
+}
+
+func newCustomTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine *clique.Clique, db ethdb.Database, chain *core.BlockChain) *testWorkerBackend {
+	lp := legacypool.New(testTxPoolConfig, chain)
+	tp, _ := txpool.New(testTxPoolConfig.PriceLimit, chain, []txpool.SubPool{lp})
+	return &testWorkerBackend{
+		db:      db,
+		chain:   chain,
+		txPool:  tp,
+		genesis: &core.Genesis{Config: chainConfig},
 	}
 }
