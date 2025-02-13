@@ -542,8 +542,7 @@ func TestRandomOwnerTxPlacement(t *testing.T) {
 	extra := make([]byte, 32+common.AddressLength+crypto.SignatureLength)
 	copy(extra[32:32+common.AddressLength], testBankAddress[:])
 
-	// Example slot storage to be placed in the genesis state
-	configAddress := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	addressBookAddress := common.HexToAddress("0x1111111111111111111111111111111111111111")
 
 	randomAddress := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	randomAddressHash := common.BytesToHash(common.LeftPadBytes(randomAddress.Bytes(), 32))
@@ -560,18 +559,15 @@ func TestRandomOwnerTxPlacement(t *testing.T) {
 	// Construct the genesis with initial allocations, storage, and correct extra data
 	genesis := &core.Genesis{
 		Config:    &config,
-		Timestamp: 9000,
+		Timestamp: 1,
 		ExtraData: extra,
 		Alloc: core.GenesisAlloc{
-			// Signer account with some storage
-			configAddress: {
-				Balance: big.NewInt(1e18),
+			addressBookAddress: {
 				Storage: map[common.Hash]common.Hash{
 					common.HexToHash("0x01"): randomAddressHash,
 				},
 			},
 			randomAddress: {
-				Balance: big.NewInt(1e18),
 				Storage: map[common.Hash]common.Hash{
 					common.HexToHash("0x00"): priorityAddressHash,
 				},
@@ -602,9 +598,9 @@ func TestRandomOwnerTxPlacement(t *testing.T) {
 	backend := newCustomTestWorkerBackend(t, &config, engine, db, blockchain)
 
 	priorityConfig := &Config{
-		Recommit:              time.Second,
-		GasCeil:               params.GenesisGasLimit,
-		ConfigContractAddress: &configAddress,
+		Recommit:                   time.Second,
+		GasCeil:                    params.GenesisGasLimit,
+		AddressBookContractAddress: &addressBookAddress,
 	}
 
 	// Create a worker
@@ -634,7 +630,7 @@ func TestRandomOwnerTxPlacement(t *testing.T) {
 		signer := types.LatestSigner(&config)
 
 		// Generate some transactions from non-priority address
-		baseNonceOther := backend.txPool.Nonce(otherAddress) + uint64((attempt-1)*100)
+		baseNonceOther := backend.txPool.Nonce(otherAddress)
 		for i := 0; i < txCount; i++ {
 			tx := types.MustSignNewTx(otherKey, signer, &types.LegacyTx{
 				Nonce:    baseNonceOther + uint64(i),
@@ -647,8 +643,7 @@ func TestRandomOwnerTxPlacement(t *testing.T) {
 		}
 
 		// Generate some transactions from priority address
-		// We'll use offset-based nonces so they don't collide across attempts
-		baseNoncePriority := backend.txPool.Nonce(priorityAddress) + uint64((attempt-1)*100)
+		baseNoncePriority := backend.txPool.Nonce(priorityAddress)
 		for i := 0; i < txCount; i++ {
 			tx := types.MustSignNewTx(priorityKey, signer, &types.LegacyTx{
 				Nonce:    baseNoncePriority + uint64(i),

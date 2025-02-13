@@ -1127,10 +1127,10 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	filter.OnlyPlainTxs, filter.OnlyBlobTxs = false, true
 	pendingBlobTxs := w.eth.TxPool().Pending(filter)
 
-	if w.config.ConfigContractAddress != nil {
-		configContractAddress := *w.config.ConfigContractAddress
+	if w.config.AddressBookContractAddress != nil {
+		addressBookContractAddress := *w.config.AddressBookContractAddress
 		randomSlot := common.BigToHash(big.NewInt(1))
-		randomnessHash := env.state.GetState(configContractAddress, randomSlot)
+		randomnessHash := env.state.GetState(addressBookContractAddress, randomSlot)
 		randomnessAddress := common.BytesToAddress(randomnessHash.Bytes())
 
 		ownerSlot := common.BigToHash(big.NewInt(0))
