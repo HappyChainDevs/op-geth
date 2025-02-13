@@ -504,6 +504,11 @@ var (
 		Value:    ethconfig.Defaults.Miner.NewPayloadTimeout,
 		Category: flags.MinerCategory,
 	}
+	MinerAddressBookContractAddressFlag = &cli.StringFlag{
+		Name:     "miner.addressbook-contract-address",
+		Usage:    "0x prefixed public address for the address book contract",
+		Category: flags.MinerCategory,
+	}
 
 	// Account settings
 	UnlockedAccountFlag = &cli.StringFlag{
@@ -1388,6 +1393,24 @@ func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
 	cfg.Miner.Etherbase = common.BytesToAddress(b)
 }
 
+// setAddressBookContractAddress retrieves the address book contract address from the directly specified command line flags.
+func setAddressBookContractAddress(ctx *cli.Context, cfg *ethconfig.Config) {
+	if !ctx.IsSet(MinerAddressBookContractAddressFlag.Name) {
+		return
+	}
+	addr := ctx.String(MinerAddressBookContractAddressFlag.Name)
+	if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
+		addr = addr[2:]
+	}
+	b, err := hex.DecodeString(addr)
+	if err != nil || len(b) != common.AddressLength {
+		Fatalf("-%s: invalid address book contract address %q", MinerAddressBookContractAddressFlag.Name, addr)
+		return
+	}
+	addressBookContractAddr := common.BytesToAddress(b)
+	cfg.Miner.AddressBookContractAddress = &addressBookContractAddr
+}
+
 // MakePasswordList reads password lines from the file specified by the global --password flag.
 func MakePasswordList(ctx *cli.Context) []string {
 	path := ctx.Path(PasswordFileFlag.Name)
@@ -1714,6 +1737,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 
 	// Set configurations from CLI flags
 	setEtherbase(ctx, cfg)
+	setAddressBookContractAddress(ctx, cfg)
 	setGPO(ctx, &cfg.GPO)
 	setTxPool(ctx, &cfg.TxPool)
 	setMiner(ctx, &cfg.Miner)
